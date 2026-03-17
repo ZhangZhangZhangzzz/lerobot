@@ -45,6 +45,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from pprint import pformat
 
+import rerun as rr
+
 from lerobot.configs import parser
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.processor import (
@@ -72,14 +74,16 @@ from lerobot.utils.utils import (
     init_logging,
     log_say,
 )
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 
 @dataclass
 class DatasetReplayConfig:
-    # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test`).
-    repo_id: str
     # Episode to replay.
     episode: int
+    # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test').
+    # If using a local dataset, this can be None and root should be provided.
+    repo_id: str | None = None
     # Root directory where the dataset will be stored (e.g. 'dataset/path').
     root: str | Path | None = None
     # Limit the frames per second. By default, uses the policy fps.
@@ -92,12 +96,30 @@ class ReplayConfig:
     dataset: DatasetReplayConfig
     # Use vocal synthesis to read events.
     play_sounds: bool = True
+    # Display data in Rerun
+    display_data: bool = False
+    # Display data on a remote Rerun server
+    display_ip: str | None = None
+    # Port of the remote Rerun server
+    display_port: int | None = None
+    # Whether to display compressed images in Rerun
+    display_compressed_images: bool = False
 
 
 @parser.wrap()
 def replay(cfg: ReplayConfig):
     init_logging()
     logging.info(pformat(asdict(cfg)))
+    
+    # Initialize Rerun if enabled (same as record)
+    display_compressed_images = False
+    if cfg.display_data:
+        init_rerun(session_name="replay", ip=cfg.display_ip, port=cfg.display_port)
+        display_compressed_images = (
+            True
+            if (cfg.display_data and cfg.display_ip is not None and cfg.display_port is not None)
+            else cfg.display_compressed_images
+        )
 
     robot_action_processor = make_default_robot_action_processor()
 
@@ -112,6 +134,7 @@ def replay(cfg: ReplayConfig):
 
     try:
         log_say("Replaying episode", cfg.play_sounds, blocking=True)
+        
         for idx in range(len(episode_frames)):
             start_episode_t = time.perf_counter()
 
@@ -125,9 +148,16 @@ def replay(cfg: ReplayConfig):
             processed_action = robot_action_processor((action, robot_obs))
 
             _ = robot.send_action(processed_action)
+            
+            # Log to Rerun if enabled (same pattern as record)
+            if cfg.display_data:
+                log_rerun_data(
+                    observation=robot_obs, action=action, compress_images=display_compressed_images
+                )
 
             dt_s = time.perf_counter() - start_episode_t
             precise_sleep(max(1 / dataset.fps - dt_s, 0.0))
+            
     finally:
         robot.disconnect()
 

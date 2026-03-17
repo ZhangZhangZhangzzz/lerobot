@@ -145,10 +145,10 @@ from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 @dataclass
 class DatasetRecordConfig:
-    # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test`).
-    repo_id: str
     # A short but accurate description of the task performed during the recording (e.g. "Pick the Lego block and drop it in the box on the right.")
     single_task: str
+    # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test`).
+    repo_id: str | Path | None = None
     # Root directory where the dataset will be stored (e.g. 'dataset/path').
     root: str | Path | None = None
     # Limit the frames per second.

@@ -36,8 +36,9 @@ from torchvision.ops.misc import FrozenBatchNorm2d
 from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_ENV_STATE, OBS_IMAGES, OBS_STATE
-
-
+#新增
+import matplotlib.pyplot as plt
+from scipy.optimize import leastsq
 class ACTPolicy(PreTrainedPolicy):
     """
     Action Chunking Transformer Policy as per Learning Fine-Grained Bimanual Manipulation with Low-Cost
@@ -50,7 +51,6 @@ class ACTPolicy(PreTrainedPolicy):
     def __init__(
         self,
         config: ACTConfig,
-        **kwargs,
     ):
         """
         Args:
@@ -67,7 +67,10 @@ class ACTPolicy(PreTrainedPolicy):
             self.temporal_ensembler = ACTTemporalEnsembler(config.temporal_ensemble_coeff, config.chunk_size)
 
         self.reset()
-
+        
+        # 新增: 训练平滑性监控
+        self.cnt = 0  # 用于记录训练步数
+        
     def get_optim_params(self) -> dict:
         # TODO(aliberts, rcadene): As of now, lr_backbone == lr
         # Should we remove this and just `return self.parameters()`?
@@ -94,86 +97,12 @@ class ACTPolicy(PreTrainedPolicy):
         if self.config.temporal_ensemble_coeff is not None:
             self.temporal_ensembler.reset()
         else:
+            # 修改: 扩大buffer保存线性插值点
             self._action_queue = deque([], maxlen=2*self.config.n_action_steps)
+            # 新增: 保存历史动作用于平滑处理
             self.last_action_list = []
-            self.last_action = None
+            self.last_action = None            
 
-    #aug:方法
-    def begin_mutation_filter(self, actions):
-        if self.last_action == None:
-            return
-        
-        first_action = actions[0][0].cpu().tolist()
-
-        diff = [abs(a - b) for a, b in zip(first_action, self.last_action)]
-
-        max_increment = 0.06
-        add_point_num = int(max(diff) / max_increment)
-        add_point_increment = [x / add_point_num for x in diff]
-
-        add_point = self.last_action
-        for i in range(0, add_point_num):
-            add_point = [a + b for a, b in zip(add_point, add_point_increment)]
-            tensor = torch.tensor([[add_point]], device=actions.device)
-            self._action_queue.extend(tensor)
-      
-    #aug：方法
-    def actions_mean_filtering(self):
-        """将轨迹均值滤波"""
-        mean_actions = [] #均值滤波后的轨迹
-        mean_num = 8 #均值滤波取的前后点数
-
-        action_step_list = []
-        action_num = len(self._action_queue)
-        # 将tensor转成list
-        for i in range (0, action_num):
-            action_step_list.append(self._action_queue[i].cpu().tolist())           
-
-        for i in range (0, action_num):
-            # 最后 mean_num个直接保留
-            if i > action_num - mean_num - 1:
-                mean_actions.append(action_step_list[i][0])
-                continue
-
-            action_total = action_step_list[i][0][:]
-            for k in range(0, len(action_total)):
-                action_total[k] = 0
-
-            # 后mean_num个
-            for j in range(i+1, i+1+mean_num):
-                for k in range(0, len(action_total)):
-                    action_total[k] += action_step_list[j][0][k]
-            
-            # 前mean_num个
-            if i < mean_num + 1:
-                if len(self.last_action_list) == 0:
-                # if True:
-                    mean_actions.append(action_step_list[i][0])
-                    continue
-                else:
-                    # 前面个数不够mean_num，从上一次规划的轨迹点来均值
-                    for j in range(0, i):
-                        for k in range(0, len(action_total)):
-                            action_total[k] += action_step_list[j][0][k]
-                    for j in range(1, mean_num + 1 - i):
-                        for k in range(0, len(action_total)):
-                            action_total[k] += self.last_action_list[-j][0][k]
-            else:
-                for j in range(1, 1+mean_num):
-                    for k in range(0, len(action_total)):
-                        action_total[k] += action_step_list[i-j][0][k]
-
-            action_mean = []
-            for k in range(0, len(action_total)):
-                action_mean.append (action_total[k] / (mean_num * 2.0))
-            mean_actions.append(action_mean)
-
-        #将action输出替换成均值滤波后的轨迹
-        self._action_queue.clear()
-        for i in range(0, len(mean_actions)):
-            self._action_queue.append(torch.tensor(mean_actions[i], device='cuda').unsqueeze(0))
-
-        self.last_action_list = action_step_list[:]
     @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor]) -> Tensor:
         """Select a single action given environment observations.
@@ -189,23 +118,23 @@ class ACTPolicy(PreTrainedPolicy):
             action = self.temporal_ensembler.update(actions)
             return action
         
-        # aug:模型预测，预测出n_action_steps序列长度后存入queue，随后根据序列中的action来控制机械臂        
+        # 新增: 保存上一次执行的动作用于突变检测
         if len(self._action_queue) == 1:
             self.last_action = self._action_queue[0].cpu().tolist()[0]
-                
+
         # Action queue logic for n_action_steps > 1. When the action_queue is depleted, populate it by
         # querying the policy.
         if len(self._action_queue) == 0:
             actions = self.predict_action_chunk(batch)[:, : self.config.n_action_steps]
-            # aug:动作突变检测与线性插值
+            # 新增: 动作突变检测与线性插值
             self.begin_mutation_filter(actions)
             # `self.model.forward` returns a (batch_size, n_action_steps, action_dim) tensor, but the queue
             # effectively has shape (n_action_steps, batch_size, *), hence the transpose.
             self._action_queue.extend(actions.transpose(0, 1))
-            # aug: 均值滤波平滑
-            self.actions_mean_filtering()  
-          
+            # 新增: 均值滤波平滑
+            self.actions_mean_filtering()            
         return self._action_queue.popleft()
+
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Tensor]) -> Tensor:
         """Predict a chunk of actions given environment observations."""
@@ -243,7 +172,8 @@ class ACTPolicy(PreTrainedPolicy):
             loss = l1_loss + mean_kld * self.config.kl_weight
         else:
             loss = l1_loss
-        # aug: 均值滤波平滑性损失
+            
+        # 新增: 均值滤波平滑性损失
         kernel_size = 11
         padding = kernel_size // 2
         x = actions_hat.transpose(1, 2)
@@ -253,6 +183,13 @@ class ACTPolicy(PreTrainedPolicy):
         mean_loss = torch.abs(actions_hat - filtered_tensor).mean()
         loss += mean_loss
         loss_dict["mean_loss"] = mean_loss.item()
+        # 新增: 训练监控
+        self.cnt += 1
+        if self.cnt == 100:
+            self.cnt = 0
+            print(f'total_loss={loss}, l1_loss={l1_loss}, ' 
+                  f'mean_kld={mean_kld * self.config.kl_weight if self.config.use_vae else 0}, '
+                  f'mean_loss={mean_loss}')
         return loss, loss_dict
 
 
@@ -309,7 +246,82 @@ class ACTTemporalEnsembler:
         self.ensembled_actions = None
         # (chunk_size,) count of how many actions are in the ensemble for each time step in the sequence.
         self.ensembled_actions_count = None
+    #新增方法
+    def actions_mean_filtering(self):
+        """将轨迹均值滤波"""
+        mean_actions = []  # 均值滤波后的轨迹
+        mean_num = 8  # 均值滤波取的前后点数
 
+        action_step_list = []
+        action_num = len(self._action_queue)
+        # 将tensor转成list
+        for i in range(0, action_num):
+            action_step_list.append(self._action_queue[i].cpu().tolist())
+
+        for i in range(0, action_num):
+            # 最后 mean_num 个直接保留
+            if i > action_num - mean_num - 1:
+                mean_actions.append(action_step_list[i][0])
+                continue
+
+            action_total = action_step_list[i][0][:]
+            for k in range(0, len(action_total)):
+                action_total[k] = 0
+
+            # 后 mean_num 个
+            for j in range(i + 1, i + 1 + mean_num):
+                for k in range(0, len(action_total)):
+                    action_total[k] += action_step_list[j][0][k]
+
+            # 前 mean_num 个
+            if i < mean_num + 1:
+                if len(self.last_action_list) == 0:
+                    mean_actions.append(action_step_list[i][0])
+                    continue
+                else:
+                    # 前面个数不够 mean_num，从上一次规划的轨迹点来均值
+                    for j in range(0, i):
+                        for k in range(0, len(action_total)):
+                            action_total[k] += action_step_list[j][0][k]
+                    for j in range(1, mean_num + 1 - i):
+                        for k in range(0, len(action_total)):
+                            action_total[k] += self.last_action_list[-j][0][k]
+            else:
+                for j in range(1, 1 + mean_num):
+                    for k in range(0, len(action_total)):
+                        action_total[k] += action_step_list[i - j][0][k]
+
+            action_mean = []
+            for k in range(0, len(action_total)):
+                action_mean.append(action_total[k] / (mean_num * 2.0))
+            mean_actions.append(action_mean)
+
+        # 将action输出替换成均值滤波后的轨迹
+        self._action_queue.clear()
+        for i in range(0, len(mean_actions)):
+            self._action_queue.append(torch.tensor(mean_actions[i], device='cuda').unsqueeze(0))
+
+        self.last_action_list = action_step_list[:]
+    #新增方法
+    def begin_mutation_filter(self, actions):
+        """动作突变检测与线性插值"""
+        if self.last_action is None:
+            return
+
+        first_action = actions[0][0].cpu().tolist()
+
+        diff = [abs(a - b) for a, b in zip(first_action, self.last_action)]
+
+        max_increment = 0.06
+        add_point_num = int(max(diff) / max_increment)
+        if add_point_num > 0:
+            add_point_increment = [x / add_point_num for x in diff]
+
+            add_point = self.last_action
+            for i in range(0, add_point_num):
+                add_point = [a + b for a, b in zip(add_point, add_point_increment)]
+                tensor = torch.tensor([[add_point]], device=actions.device)
+                self._action_queue.extend(tensor)
     def update(self, actions: Tensor) -> Tensor:
         """
         Takes a (batch, chunk_size, action_dim) sequence of actions, update the temporal ensemble for all
@@ -390,26 +402,21 @@ class ACT(nn.Module):
 
         if self.config.use_vae:
             self.vae_encoder = ACTEncoder(config, is_vae_encoder=True)
-            # 创建一个（1，512）的嵌入层
             self.vae_encoder_cls_embed = nn.Embedding(1, config.dim_model)
             # Projection layer for joint-space configuration to hidden dimension.
-            # 将机器人状态特征投影到隐藏维度 1*14 -> 1*512
             if self.config.robot_state_feature:
                 self.vae_encoder_robot_state_input_proj = nn.Linear(
                     self.config.robot_state_feature.shape[0], config.dim_model
                 )
             # Projection layer for action (joint-space target) to hidden dimension.
-            # 将动作特征投影到隐藏维度 k*14 -> 1*512
             self.vae_encoder_action_input_proj = nn.Linear(
                 self.config.action_feature.shape[0],
                 config.dim_model,
             )
             # Projection layer from the VAE encoder's output to the latent distribution's parameter space.
-            # 将编码器的输出投影到潜在分布的参数空间 1*512 -> 1*64 (2个32，一个均值一个方差)
             self.vae_encoder_latent_output_proj = nn.Linear(config.dim_model, config.latent_dim * 2)
             # Fixed sinusoidal positional embedding for the input to the VAE encoder. Unsqueeze for batch
             # dimension.
-            # 计算输入编码器的token数量（1个cls + k个动作序列 + 1个机器人状态）
             num_input_token_encoder = 1 + config.chunk_size
             if self.config.robot_state_feature:
                 num_input_token_encoder += 1
@@ -436,7 +443,6 @@ class ACT(nn.Module):
 
         # Transformer encoder input projections. The tokens will be structured like
         # [latent, (robot_state), (env_state), (image_feature_map_pixels)].
-        
         if self.config.robot_state_feature:
             self.encoder_robot_state_input_proj = nn.Linear(
                 self.config.robot_state_feature.shape[0], config.dim_model
@@ -494,18 +500,16 @@ class ACT(nn.Module):
             Tuple containing the latent PDF's parameters (mean, log(σ²)) both as (B, L) tensors where L is the
             latent dimension.
         """
-        # 必须有动作标签用于VAE训练
         if self.config.use_vae and self.training:
             assert ACTION in batch, (
                 "actions must be provided when using the variational objective in training mode."
             )
-        # 优先从图像观测获取批次大小，否则从环境状态获取
+
         batch_size = batch[OBS_IMAGES][0].shape[0] if OBS_IMAGES in batch else batch[OBS_ENV_STATE].shape[0]
 
         # Prepare the latent for input to the transformer encoder.
         if self.config.use_vae and ACTION in batch and self.training:
             # Prepare the input to the VAE encoder: [cls, *joint_space_configuration, *action_sequence].
-            # 扩展[CLS]令牌到批次大小，从(1, D)扩展到(B, 1, D)
             cls_embed = einops.repeat(
                 self.vae_encoder_cls_embed.weight, "1 d -> b 1 d", b=batch_size
             )  # (B, 1, D)
@@ -513,7 +517,7 @@ class ACT(nn.Module):
                 robot_state_embed = self.vae_encoder_robot_state_input_proj(batch[OBS_STATE])
                 robot_state_embed = robot_state_embed.unsqueeze(1)  # (B, 1, D)
             action_embed = self.vae_encoder_action_input_proj(batch[ACTION])  # (B, S, D)
-            # 构建完整输入序列：[CLS, robot_state, env_state, action_sequence]
+
             if self.config.robot_state_feature:
                 vae_encoder_input = [cls_embed, robot_state_embed, action_embed]  # (B, S+2, D)
             else:
@@ -542,12 +546,11 @@ class ACT(nn.Module):
                 pos_embed=pos_embed.permute(1, 0, 2),
                 key_padding_mask=key_padding_mask,
             )[0]  # select the class token, with shape (B, D)
-            # 前半部分是均值μ，后半部分是2log(σ)
-            latent_pdf_params = self.vae_encoder_latent_output_proj(cls_token_out)# (B, 2*latent_dim)
+            latent_pdf_params = self.vae_encoder_latent_output_proj(cls_token_out)
             mu = latent_pdf_params[:, : self.config.latent_dim]
             # This is 2log(sigma). Done this way to match the original implementation.
             log_sigma_x2 = latent_pdf_params[:, self.config.latent_dim :]
-            #重参数化采样
+
             # Sample the latent with the reparameterization trick.
             latent_sample = mu + log_sigma_x2.div(2).exp() * torch.randn_like(mu)
         else:

@@ -182,6 +182,11 @@ def sanity_check_dataset_name(repo_id, policy_cfg):
     Raises:
         ValueError: If the naming convention is violated.
     """
+    # Handle None repo_id (local dataset)
+    if repo_id is None:
+        # For local datasets, skip the naming convention check
+        return
+    
     _, dataset_name = repo_id.split("/")
     # either repo_id doesnt start with "eval_" and there is no policy
     # or repo_id starts with "eval_" and there is a policy

@@ -95,7 +95,7 @@ class DiffusionConfig(PreTrainedConfig):
     """
 
     # Inputs / output structure.
-    n_obs_steps: int = 2
+    n_obs_steps: int = 1
     horizon: int = 16
     n_action_steps: int = 8
 
@@ -127,8 +127,8 @@ class DiffusionConfig(PreTrainedConfig):
     diffusion_step_embed_dim: int = 128
     use_film_scale_modulation: bool = True
     # Noise scheduler.
-    noise_scheduler_type: str = "DDPM"
-    num_train_timesteps: int = 100
+    noise_scheduler_type: str = "DDIM"
+    num_train_timesteps: int = 50
     beta_schedule: str = "squaredcos_cap_v2"
     beta_start: float = 0.0001
     beta_end: float = 0.02
