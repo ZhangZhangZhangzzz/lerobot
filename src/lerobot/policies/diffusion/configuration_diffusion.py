@@ -95,8 +95,8 @@ class DiffusionConfig(PreTrainedConfig):
     """
 
     # Inputs / output structure.
-    n_obs_steps: int = 1
-    horizon: int = 16
+    n_obs_steps: int = 2
+    horizon: int = 8
     n_action_steps: int = 8
 
     normalization_mapping: dict[str, NormalizationMode] = field(
@@ -109,7 +109,7 @@ class DiffusionConfig(PreTrainedConfig):
 
     # The original implementation doesn't sample frames for the last 7 steps,
     # which avoids excessive padding and leads to improved training results.
-    drop_n_last_frames: int = 7  # horizon - n_action_steps - n_obs_steps + 1
+    drop_n_last_frames: int = 3  # horizon - n_action_steps - n_obs_steps + 1
 
     # Architecture / modeling.
     # Vision backbone.
@@ -121,23 +121,23 @@ class DiffusionConfig(PreTrainedConfig):
     spatial_softmax_num_keypoints: int = 32
     use_separate_rgb_encoder_per_camera: bool = False
     # Unet.
-    down_dims: tuple[int, ...] = (512, 1024, 2048)
+    down_dims: tuple[int, ...] = (256, 512, 1024) #256, 512, 1024
     kernel_size: int = 5
     n_groups: int = 8
     diffusion_step_embed_dim: int = 128
     use_film_scale_modulation: bool = True
     # Noise scheduler.
-    noise_scheduler_type: str = "DDIM"
-    num_train_timesteps: int = 50
+    noise_scheduler_type: str = "DDPM"
+    num_train_timesteps: int = 100
     beta_schedule: str = "squaredcos_cap_v2"
     beta_start: float = 0.0001
     beta_end: float = 0.02
     prediction_type: str = "epsilon"
-    clip_sample: bool = True
+    clip_sample: bool = False
     clip_sample_range: float = 1.0
 
     # Inference
-    num_inference_steps: int | None = None
+    num_inference_steps: int | None = 50
 
     # Loss computation
     do_mask_loss_for_padding: bool = False

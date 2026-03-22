@@ -162,7 +162,7 @@ class DatasetRecordConfig:
     # Encode frames in the dataset into video
     video: bool = True
     # Upload dataset to Hugging Face hub.
-    push_to_hub: bool = True
+    push_to_hub: bool = False
     # Upload on private repository on the Hugging Face hub.
     private: bool = False
     # Add tags to your dataset on the hub.
@@ -481,6 +481,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 preprocessor_overrides={
                     "device_processor": {"device": cfg.policy.device},
                     "rename_observations_processor": {"rename_map": cfg.dataset.rename_map},
+                    "tokenizer_processor": {"tokenizer_name": "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"},
                 },
             )
 

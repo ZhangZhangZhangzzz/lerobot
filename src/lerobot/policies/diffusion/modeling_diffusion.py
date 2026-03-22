@@ -142,6 +142,8 @@ class DiffusionPolicy(PreTrainedPolicy):
         """Run the batch through the model and compute the loss for training or validation."""
         if self.config.image_features:
             batch = dict(batch)  # shallow copy so that adding a key doesn't modify the original
+            #堆叠后的形状变为 [batch_size, num_cameras, channels, height, width]
+
             batch[OBS_IMAGES] = torch.stack([batch[key] for key in self.config.image_features], dim=-4)
         loss = self.diffusion.compute_loss(batch)
         # no output_dict so returning None
@@ -337,6 +339,8 @@ class DiffusionModel(nn.Module):
             device=trajectory.device,
         ).long()
         # Add noise to the clean trajectories according to the noise magnitude at each timestep.
+        # 这是扩散过程的核心：x_t = sqrt(alpha_t) * x_0 + sqrt(1-alpha_t) * epsilon
+
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, eps, timesteps)
 
         # Run the denoising network (that might denoise the trajectory, or attempt to predict the noise).
